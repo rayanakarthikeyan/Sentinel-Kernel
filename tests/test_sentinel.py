@@ -1,6 +1,9 @@
 import os
 import sys
 import unittest
+import tempfile
+from pathlib import Path
+from unittest.mock import Mock
 
 from sentinel.sandbox.local_process import ProcessIsolatedSandbox
 from sentinel.schemas.incident import TelemetryAlert, IncidentStatus
@@ -29,11 +32,32 @@ class TestSentinelKernel(unittest.TestCase):
             message="Database pool exhaustion causing auth gateway timeout.",
             stack_trace='File "auth_service.py", line 89, in handle_request'
         )
-        incident = orchestrator.remediate(alert)
+        with tempfile.TemporaryDirectory() as folder:
+            Path(folder, 'auth_service.py').write_text(
+                'def handle_request(payload):\n    return {"status": "failure"}\n')
+            incident = orchestrator.remediate(alert, source_repo_path=folder)
         self.assertEqual(incident.status, IncidentStatus.RESOLVED)
         self.assertIsNotNone(incident.proposed_diff)
         self.assertTrue(incident.verification_result.passed)
         self.assertIn("Incident Post-Mortem", incident.post_mortem_markdown)
+
+class ReproductionGateTests(unittest.TestCase):
+    def test_missing_source_escalates_without_patch(self):
+        alert = TelemetryAlert(alert_id='missing', service_name='test',
+                              error_name='Error', message='No source supplied')
+        result = SREOrchestrator().remediate(alert)
+        self.assertEqual(result.status, IncidentStatus.ESCALATED)
+        self.assertIsNone(result.proposed_diff)
+
+    def test_already_passing_test_does_not_authorize_patch(self):
+        alert = TelemetryAlert(alert_id='passing', service_name='test',
+                              error_name='Error', message='Already passes')
+        with tempfile.TemporaryDirectory() as folder:
+            Path(folder, 'service.py').write_text(
+                'def handle_request(payload):\n    return {"status": "success"}\n')
+            result = SREOrchestrator().remediate(alert, source_repo_path=folder)
+        self.assertEqual(result.status, IncidentStatus.ESCALATED)
+        self.assertIsNone(result.proposed_diff)
 
 if __name__ == '__main__':
     unittest.main()

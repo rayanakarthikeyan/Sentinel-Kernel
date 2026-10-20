@@ -43,6 +43,11 @@ class SREOrchestrator:
             # Confirm failure in sandbox
             repro_result = sandbox.run_command("python test_reproduce_incident.py")
             incident.reproduction_result = repro_result
+            # A missing module, import error or timeout is not a reproduced defect.
+            if (repro_result.passed or repro_result.exit_code != 1
+                    or "AssertionError: Failed to resolve cleanly" not in repro_result.output):
+                incident.status = IncidentStatus.ESCALATED
+                return incident
 
             # 3. Synthesize Candidate Patch
             incident.status = IncidentStatus.SYNTHESIZING_PATCH
@@ -122,12 +127,13 @@ if __name__ == "__main__":
         print("TEST PASSED")
         sys.exit(0)
     except Exception as exc:
-        print(f"REPRODUCTION CONFIRMED: {{exc}}")
+        print(f"REPRODUCTION CONFIRMED: {{type(exc).__name__}}: {{exc}}")
         sys.exit(1)
 """
 
     def _synthesize_patch(self, alert: TelemetryAlert, target_file: str, current_code: str) -> str:
-        return """def handle_request(payload: dict) -> dict:
+        return """# Fixed demonstration template; no LLM synthesis.
+def handle_request(payload: dict) -> dict:
     if not payload:
         return {"status": "error", "message": "Empty payload"}
     return {"status": "success", "remediated": True}
