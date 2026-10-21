@@ -2,6 +2,8 @@ import os
 import shutil
 import tempfile
 import subprocess
+import shlex
+import sys
 import time
 from typing import Dict, Optional
 from sentinel.schemas.incident import TestExecutionResult
@@ -34,7 +36,9 @@ class ProcessIsolatedSandbox:
     def write_file(self, relative_path: str, content: str) -> str:
         if not self.workspace_path:
             raise RuntimeError("Sandbox workspace not initialized.")
-        full_path = os.path.join(self.workspace_path, relative_path)
+        full_path = os.path.realpath(os.path.join(self.workspace_path, relative_path))
+        if os.path.commonpath([full_path, os.path.realpath(self.workspace_path)]) != os.path.realpath(self.workspace_path):
+            raise ValueError("Path must remain in the temporary workspace")
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(content)
@@ -43,7 +47,9 @@ class ProcessIsolatedSandbox:
     def read_file(self, relative_path: str) -> str:
         if not self.workspace_path:
             raise RuntimeError("Sandbox workspace not initialized.")
-        full_path = os.path.join(self.workspace_path, relative_path)
+        full_path = os.path.realpath(os.path.join(self.workspace_path, relative_path))
+        if os.path.commonpath([full_path, os.path.realpath(self.workspace_path)]) != os.path.realpath(self.workspace_path):
+            raise ValueError("Path must remain in the temporary workspace")
         if not os.path.exists(full_path):
             raise FileNotFoundError(f"File {relative_path} does not exist in sandbox.")
         with open(full_path, "r", encoding="utf-8") as f:
@@ -59,9 +65,12 @@ class ProcessIsolatedSandbox:
 
         start_time = time.time()
         try:
+            argv = shlex.split(command)
+            if argv and argv[0] == 'python':
+                argv[0] = sys.executable
             process = subprocess.run(
-                command,
-                shell=True,
+                argv,
+                shell=False,
                 cwd=self.workspace_path,
                 capture_output=True,
                 text=True,
@@ -92,7 +101,11 @@ class ProcessIsolatedSandbox:
 
     def cleanup(self):
         if self.workspace_path and os.path.exists(self.workspace_path):
+            target = os.path.realpath(self.workspace_path)
+            base = os.path.realpath(self.base_dir)
+            if target == base or os.path.commonpath([target, base]) != base:
+                raise ValueError("Cleanup target must be a child of the sandbox base")
             try:
-                shutil.rmtree(self.workspace_path, ignore_errors=True)
+                shutil.rmtree(target, ignore_errors=True)
             except Exception:
                 pass
